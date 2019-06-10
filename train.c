@@ -10,7 +10,7 @@
 
 #define L 200
 #define T_NEW_PASS 3
-#define TRAIN_CAPACITY 100
+#define TRAIN_CAPACITY 10
 #define MAX_PASSENGERS 512
 #define T_MAX 15 //max time to load passengers
 #define T_TR 15
@@ -157,7 +157,10 @@ train_thread(void * argtr){
 		station[st].train = tid;	/*current train at this station*/
 		
 		pthread_mutex_lock(&lock);
-			while(train[tid].npassengers <= TRAIN_CAPACITY){	
+			int n = train[tid].npassengers;
+			while(train[tid].npassengers <= TRAIN_CAPACITY){
+				if(train[tid].npassengers == TRAIN_CAPACITY)
+					break;	
 				int pid = get(st);
 				if(pid == -1){
 					break;
@@ -165,6 +168,7 @@ train_thread(void * argtr){
 				train[tid].passengers_in[train[tid].npassengers] = pid;
 				train[tid].npassengers++;		
 			}	
+			printf("npassengers == %d\n",train[tid].npassengers);
 		pthread_mutex_unlock(&lock);
 		
 		/*travel to next station*/
