@@ -217,6 +217,7 @@ train_thread(void * argtr){
 							
 				}
 				fprintf(train[tid].fp, "Destinations: %s\n\n", second_l);
+				fprintf(train[tid].fp, "%s\n", "-------------------------------------------------------------------------------------");
 				fclose(train[tid].fp);
 			} else{ perror("file write error:");}
 		pthread_mutex_unlock(&lock);
