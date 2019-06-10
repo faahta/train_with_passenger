@@ -1,0 +1,15 @@
+Train 1: station:3 npassengers:4 passengers_in: 1 2 3 6 
+Destinations: 3331 
+
+Train 0: station:0 npassengers:9 passengers_in: 0 12 15 29 30 110 112 113 115 
+Destinations: 223001002 
+
+Train 1: station:0 npassengers:13 passengers_in: 1 2 3 6 125 126 127 128 129 130 131 132 133 
+Destinations: 3331111111111 
+
+Train 0: station:1 npassengers:21 passengers_in: 0 12 15 29 30 110 112 113 115 4 5 7 10 11 31 34 35 108 109 114 118 
+Destinations: 223001002001222223301 
+
+Train 1: station:1 npassengers:8 passengers_in: 1 2 3 6 125 126 127 128 
+Destinations: 33311111 
+
