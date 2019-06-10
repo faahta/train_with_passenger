@@ -48,7 +48,7 @@ typedef struct Train{
 Train *train;
 Station *station;
 Passenger *passenger;
-pthread_mutex_t lock;	//ME for passengers to write to buffer
+pthread_mutex_t lock;	//ME to read and write to shared buffer
 sem_t *S; //for signaling train threads to start
 
 static void 
@@ -144,19 +144,20 @@ train_thread(void * argtr){
 	sem_wait(S);
 	int *id = (int *)argtr;
 	int tid = *id;	
-	int i = 0;
+	int i;
 	while(1){
 		sleep(1);
 		/*wait for red semaphore*/
 		int st = train[tid].station; /*current station*/
 		if(train[0].station == train[1].station){		
 			fprintf(stdout, "train %d waiting for station %d to be released\n", tid, st);
+			/*the fastest train will pass this red semaphore*/
 			sem_wait(station[st].red_sem); 
 		}
 		station[st].train = tid;	/*current train at this station*/
 		
 		pthread_mutex_lock(&lock);
-			while( (train[tid].npassengers + station[st].in) <= TRAIN_CAPACITY){	
+			while(train[tid].npassengers <= TRAIN_CAPACITY){	
 				int pid = get(st);
 				if(pid == -1){
 					break;
@@ -175,19 +176,20 @@ train_thread(void * argtr){
 		
 		sem_post(station[st].red_sem);
 		
-		/*check passengers who reached their destination*/			
-		for(i=0; i<train[tid].npassengers; i++){
-			int p = train[tid].passengers_in[i];
-			//check if each passenger reaches its destination
-			if(passenger[p].dst_station == train[tid].station){
-				sem_post(station[next_station].sem); /**/
-				train[tid].npassengers--;
-				train[tid].passengers_out++;
+		pthread_mutex_lock(&lock);
+			/*check passengers who reached their destination*/			
+			for(i=0; i<train[tid].npassengers; i++){
+				int p = train[tid].passengers_in[i];
+				//check if each passenger reaches its destination
+				if(passenger[p].dst_station == train[tid].station){
+					sem_post(station[next_station].sem); /**/
+					train[tid].npassengers--;
+					train[tid].passengers_out++;
+				}
 			}
-		}
-			
+		pthread_mutex_unlock(&lock);	
 		/***write to log file ***/
-		pthread_mutex_lock(&train[tid].w_lock);
+		pthread_mutex_lock(&lock);
 			if((train[tid].fp = fopen("log.txt", "a")) != NULL){
 				char first[train[tid].npassengers];
 				char second[train[tid].npassengers]; 
@@ -206,30 +208,36 @@ train_thread(void * argtr){
 																	train[tid].npassengers, first_l);	
 				/*second line => destination station of each passenger*/
 				for(i=0; i<train[tid].npassengers; i++){
-					sprintf(second + i, "%d ", passenger[train[tid].passengers_in[i]].dst_station);			
+					if(i == 0){
+						sprintf(second, "%d ", passenger[train[tid].passengers_in[0]].dst_station);	
+					} else{
+						sprintf(second, "%d ",  passenger[train[tid].passengers_in[i]].dst_station);
+						strcat(second_l, second);
+					}
+							
 				}
-				fprintf(train[tid].fp, "Destinations: %s\n\n", second);
+				fprintf(train[tid].fp, "Destinations: %s\n\n", second_l);
 				fclose(train[tid].fp);
 			} else{ perror("file write error:");}
-		pthread_mutex_unlock(&train[tid].w_lock);
+		pthread_mutex_unlock(&lock);
 			
 		/*pipe write to station thread*/
-		int result;
+		int res1, res2;
 		if(tid == 0){
-			result = write(fd1[1], &train[tid], sizeof(train[tid]));
-			if(result != 1){
+			res1 = write(fd1[1], &train[tid], sizeof(train[tid]));
+			if(res1 != 1){
 				perror("pipe write: ");
 			}
 		}		
 		if(tid == 1){
-			result = write(fd2[1], &train[tid], sizeof(train[tid]));
-			if(result != 1){
+			res2 = write(fd2[1], &train[tid], sizeof(train[tid]));
+			if(res2 != 1){
 				perror("pipe write: ");
 			}
 		}
 		train[tid].passengers_out = 0;	
 		/*release the station for the next train*/
-		sem_post(station[train[tid].station].red_sem);	
+		//sem_post(station[train[tid].station].red_sem);	
 	}
 	
 	pthread_exit(NULL);
