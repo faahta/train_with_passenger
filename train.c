@@ -8,10 +8,10 @@
 #include<stdbool.h>
 #include<errno.h>
 
-#define L 200
+#define L 50
 #define T_NEW_PASS 3
-#define TRAIN_CAPACITY 10
-#define MAX_PASSENGERS 512
+#define TRAIN_CAPACITY 5
+#define MAX_PASSENGERS 150
 #define T_MAX 15 //max time to load passengers
 #define T_TR 15
 #define N_STATIONS 4
@@ -51,11 +51,14 @@ Passenger *passenger;
 pthread_mutex_t lock;	//ME to read and write to shared buffer
 sem_t *S; //for signaling train threads to start
 
+
+/***************************************PRODUCER CONSUMER FUNCTIONS*******************************************/
+/************************************************************************************************************/
 static void 
 put(int st, int id){
 	sem_wait(station[st].empty);
 	station[st].passengers[station[st].in] = id;
-	printf("passenger %d is in station %d\n",id, st);
+	//printf("passenger %d is in station %d\n",id, st);
 	station[st].in = (station[st].in + 1) % MAX_PASSENGERS;
 	sem_post(station[st].full);
 }
@@ -78,16 +81,111 @@ get (int st){
 			perror("sem_timedwait");
 			return -1;
 		}
-	} else
-		printf("train %d sem_timedwait() succeeded\n", station[st].train);
+	} else{
+		//printf("train %d sem_timedwait() succeeded\n", station[st].train);
+	}
 	data = station[st].passengers[station[st].out];
 	station[st].out = (station[st].out + 1) % MAX_PASSENGERS;
-	//sem_post(station[st].empty);
+	sem_post(station[st].empty);
 	return data;
 }
+/************************************************************************************************************/
+/************************************************************************************************************/
 
-/**************************THREADS START ROUTINE*************************************/
-/************************************************************************************/
+
+/*****************************************TRAIN FUNCTIONS*****************************************************/
+/************************************************************************************************************/
+void load_passengers(int tid, int st){
+	pthread_mutex_lock(&lock);
+		int n = train[tid].npassengers;
+		while(train[tid].npassengers <= TRAIN_CAPACITY){
+			if(train[tid].npassengers == TRAIN_CAPACITY)
+				break;	
+			int pid = get(st);
+			if(pid == -1){
+				break;
+			}
+			train[tid].passengers_in[train[tid].npassengers] = pid;
+			train[tid].npassengers++;		
+		}
+	pthread_mutex_unlock(&lock);
+}
+
+void drop_passengers(int tid, int st){
+	/*check passengers who reached their destination*/	
+	int i;
+	int npassengers = train[tid].npassengers;		
+	for(i = 0; i < train[tid].npassengers; i++){
+		int p = train[tid].passengers_in[i];
+		//check if each passenger reaches its destination
+		if(passenger[p].dst_station == train[tid].station){
+			/*re-arrange passengers array*/
+			int j;
+			for(j = i; j < train[tid].npassengers; j++)
+				train[tid].passengers_in[j] = train[tid].passengers_in[j+1];
+			npassengers--;
+			train[tid].passengers_out++;
+			sem_post(station[st].sem); /**/
+		}
+	}
+	train[tid].npassengers = npassengers;
+}
+
+void write_log(int tid) {
+	if((train[tid].fp = fopen("log.txt", "a")) != NULL){	
+		char first[train[tid].npassengers], second[train[tid].npassengers];
+		char first_l[train[tid].npassengers], second_l[train[tid].npassengers];
+
+		/*first line => the train's current situation*/	
+		int i;			
+		for(i=0; i<train[tid].npassengers; i++){
+			if(i == 0){
+				sprintf(first_l, "%d ", train[tid].passengers_in[0]);	
+			} else{
+				sprintf(first, "%d ", train[tid].passengers_in[i]);	
+				strcat(first_l, first);
+			}	
+		}
+		pthread_mutex_lock(&lock);	
+		fprintf(train[tid].fp, "Train %d: station:%d npassengers:%d passengers_in: %s\n",tid,train[tid].station,
+															train[tid].npassengers, first_l);	
+		/*second line => destination station of each passenger*/
+		for(i=0; i<train[tid].npassengers; i++){
+			if(i == 0){
+				sprintf(second_l, "%d ", passenger[train[tid].passengers_in[0]].dst_station);	
+			} else{
+				sprintf(second, "%d ",  passenger[train[tid].passengers_in[i]].dst_station);
+				strcat(second_l, second);
+			}		
+		}
+		fprintf(train[tid].fp, "Destinations: %s\n\n", second_l);
+		fprintf(train[tid].fp, "%s\n", "-------------------------------------------------------------------------------------");
+		fclose(train[tid].fp);
+		pthread_mutex_unlock(&lock);
+	} else{ perror("file write error:");}
+}
+
+void write_pipe(int tid){
+	/*pipe write to station thread*/
+	int res1, res2;
+	if(tid == 0){
+		res1 = write(fd1[1], &train[tid], sizeof(train[tid]));
+		if(res1 != 1){
+			perror("pipe write: ");
+		}
+	}		
+	if(tid == 1){
+		res2 = write(fd2[1], &train[tid], sizeof(train[tid]));
+		if(res2 != 1){
+			perror("pipe write: ");
+		}
+	}
+}
+/************************************************************************************************************/
+/************************************************************************************************************/
+
+/************************************THREADS START ROUTINE**************************************************/
+/***********************************************************************************************************/
 static void * 
 station_thread(void * argst){
 	pthread_detach(pthread_self());
@@ -141,115 +239,41 @@ passenger_thread(void * argps){
 static void * 
 train_thread(void * argtr){
 	pthread_detach(pthread_self());
-	sem_wait(S);
+	//sem_wait(S);
 	int *id = (int *)argtr;
 	int tid = *id;	
 	int i;
 	while(1){
-		sleep(1);
-		/*wait for red semaphore*/
-		int st = train[tid].station; /*current station*/
-		if(train[0].station == train[1].station){		
-			fprintf(stdout, "train %d waiting for station %d to be released\n", tid, st);
-			/*the fastest train will pass this red semaphore*/
-			sem_wait(station[st].red_sem); 
-		}
+		sleep(3);
+		int st = train[tid].station; /*current station*/		
+		/*the fastest train will pass this red semaphore*/
+		sem_wait(station[st].red_sem); 
 		station[st].train = tid;	/*current train at this station*/
 		
-		pthread_mutex_lock(&lock);
-			int n = train[tid].npassengers;
-			while(train[tid].npassengers <= TRAIN_CAPACITY){
-				if(train[tid].npassengers == TRAIN_CAPACITY)
-					break;	
-				int pid = get(st);
-				if(pid == -1){
-					break;
-				}
-				train[tid].passengers_in[train[tid].npassengers] = pid;
-				train[tid].npassengers++;		
-			}	
-			printf("npassengers == %d\n",train[tid].npassengers);
-		pthread_mutex_unlock(&lock);
-		
+		load_passengers(tid, st);
+		drop_passengers(tid, st);
 		/*travel to next station*/
 		sleep(T_TR);
 		int next_station = station[st].next_st;
 		train[tid].station = next_station;
-		
 		printf("train %d arrived to station %d...\n",tid, st);
 		
+		drop_passengers(tid, next_station);
 		sem_post(station[st].red_sem);
 		
-		pthread_mutex_lock(&lock);
-			/*check passengers who reached their destination*/			
-			for(i=0; i<train[tid].npassengers; i++){
-				int p = train[tid].passengers_in[i];
-				//check if each passenger reaches its destination
-				if(passenger[p].dst_station == train[tid].station){
-					sem_post(station[next_station].sem); /**/
-					train[tid].npassengers--;
-					train[tid].passengers_out++;
-				}
-			}
-		pthread_mutex_unlock(&lock);	
-		/***write to log file ***/
-		pthread_mutex_lock(&lock);
-			if((train[tid].fp = fopen("log.txt", "a")) != NULL){
-				char first[train[tid].npassengers];
-				char second[train[tid].npassengers]; 
-				char first_l[MAX_PASSENGERS];
-				char second_l[MAX_PASSENGERS];
-				/*first line => the train's current situation*/				
-				for(i=0; i<train[tid].npassengers; i++){
-					if(i == 0){
-						sprintf(first_l, "%d ", train[tid].passengers_in[0]);	
-					} else{
-						sprintf(first, "%d ", train[tid].passengers_in[i]);	
-						strcat(first_l, first);
-					}	
-				}	
-				fprintf(train[tid].fp, "Train %d: station:%d npassengers:%d passengers_in: %s\n",tid,train[tid].station,
-																	train[tid].npassengers, first_l);	
-				/*second line => destination station of each passenger*/
-				for(i=0; i<train[tid].npassengers; i++){
-					if(i == 0){
-						sprintf(second, "%d ", passenger[train[tid].passengers_in[0]].dst_station);	
-					} else{
-						sprintf(second, "%d ",  passenger[train[tid].passengers_in[i]].dst_station);
-						strcat(second_l, second);
-					}
-							
-				}
-				fprintf(train[tid].fp, "Destinations: %s\n\n", second_l);
-				fprintf(train[tid].fp, "%s\n", "-------------------------------------------------------------------------------------");
-				fclose(train[tid].fp);
-			} else{ perror("file write error:");}
-		pthread_mutex_unlock(&lock);
-			
-		/*pipe write to station thread*/
-		int res1, res2;
-		if(tid == 0){
-			res1 = write(fd1[1], &train[tid], sizeof(train[tid]));
-			if(res1 != 1){
-				perror("pipe write: ");
-			}
-		}		
-		if(tid == 1){
-			res2 = write(fd2[1], &train[tid], sizeof(train[tid]));
-			if(res2 != 1){
-				perror("pipe write: ");
-			}
-		}
-		train[tid].passengers_out = 0;	
-		/*release the station for the next train*/
-		//sem_post(station[train[tid].station].red_sem);	
+		write_log(tid);
+		write_pipe(tid);		
+		
+		train[tid].passengers_out = 0;		
 	}
 	
 	pthread_exit(NULL);
 }
+/************************************************************************************************************/
+/************************************************************************************************************/
 
-
-
+/***************************************INITIAL SETUP FUNCTIONS**********************************************/
+/************************************************************************************************************/
 void printstations(int src, int dst){
 	printf("ST%d<------->ST%d\n", src, dst);
 }
@@ -313,6 +337,8 @@ setup(){
 	}
 
 }
+/************************************************************************************************************/
+/************************************************************************************************************/
 
 int 
 main(int argc, char *argv[]){
@@ -327,14 +353,15 @@ main(int argc, char *argv[]){
 	th_st = (pthread_t *)malloc(N_STATIONS * sizeof(pthread_t));
 	th_psn = (pthread_t *)malloc(L * sizeof(pthread_t));
 	
-	//create train thread
+	/*create train thread*/
 	int *ti;
 	for(i=0; i<N_TRAINS; i++){
 		ti = (int *)malloc(sizeof(int));
 		*ti = i;
 		pthread_create(&th_tr[i], NULL, train_thread, (void *)ti);
+		sleep(1);
 	}
-	//create station thread
+	/*create station thread*/
 	int *si;
 	for(i=0; i<N_STATIONS; i++){
 		si = (int *)malloc(sizeof(int));
@@ -344,7 +371,7 @@ main(int argc, char *argv[]){
 	
 	int j;
 	j=0;
-	//create passenger threads
+	/*create passenger threads*/
 	int *pi;
 	for(j=0; j < L; j++){
 		sleep((rand() % T_NEW_PASS));
@@ -353,11 +380,8 @@ main(int argc, char *argv[]){
 		pthread_create(&th_psn[i], NULL, passenger_thread, (void *)pi);
 	}
 	
-	for(i=0; i<2; i++){
-		sem_post(S);
-		//sem_post(train[i].red_sem[train[i].station]);
-	}
-	
+	//for(i=0; i<2; i++)
+		//sem_post(S);
 	pthread_exit((void *)pthread_self());
 	
 }
